@@ -1,0 +1,304 @@
+--- 
+- 
+  become: false
+  hosts: localhost
+  name: "Connect cluster"
+  vars: 
+    cloud_env: openshift
+    helm_release_name: twistlock-console
+    helm_release_namespace: twistlock
+    kubernetes_service_name: twistlock-console
+    twistlock_defender_namespace: twistlock
+    twistlock_defender_orchestration: openshift
+    prisma_admin_user: msssocadmin
+    prisma_admin_password: 
+    IBMCLOUD_API_KEY: 
+    IBMCLOUD_KUBE_CLUSTER_ID: 
+    IBMCLOUD_REGION: 
+    IBMCLOUD_RESOURCE_GROUP: 
+    prisma_license:
+    helm_chart_path: "{{ lookup('env', 'PWD') }}/{{projPath}}"
+    helm_values_path: "{{ helm_chart_path}}/values.yaml"
+    #base_url: https://user-registration-newoperator.cloudtribe-devops-024f02d285327b3efec3badccd07e2a1-0000.us-south.containers.appdomain.cloud
+    base_url: https://customer-registration-xpp.apps-priv.dal09-dev-ocp-01.cl.sec.ibm.com
+    prisma_route: pcc-route
+    isDeploymentsuccess: false
+    signUpStatus: 0
+
+
+  tasks: 
+    - name: "Prep: Set up OCP based environment to deploy prisma-console"
+      block:
+        - 
+          name: "Message to display helm chart path"
+          debug: 
+           msg: "{{helm_values_path}}"
+    
+        - 
+          name: "Prep: Create temporary file for Kubernetes Kube Config (kubeconfig)"
+          register: kubeconf_temp_file
+          tempfile: 
+            state: file
+        - 
+          set_fact: 
+            kubeconfig_path: "{{ kubeconf_temp_file.path }}"      
+        - 
+          name: "Prisma: Get customer cluster data from DB"
+          register: Customer_Data
+          uri: 
+            force: true
+            method: GET
+            status_code: 
+              - 200
+            url: "{{base_url}}/customer/{{custId}}/clusterDetails"
+            validate_certs: false
+            body_format: json
+    
+        - 
+          set_fact: 
+            IBMCLOUD_API_KEY: "{{ Customer_Data.json.apiKey }}"
+            IBMCLOUD_KUBE_CLUSTER_ID: "{{ Customer_Data.json.clusterId }}"
+            IBMCLOUD_REGION: "{{ Customer_Data.json.region }}"
+            IBMCLOUD_RESOURCE_GROUP: "{{ Customer_Data.json.resourceGroup }}"
+            prisma_license: "{{ Customer_Data.json.licenseKey }}"      
+        - 
+          ignore_errors: true
+          name: "IBMCloud: Verify if IBMCloud tools are installed."
+          register: ibmcloud_installed
+          shell: "which ibmcloud"
+        - 
+          name: "IBMCloud: Installing IBMCloud tools when not installed."
+          shell: "curl -sL https://ibm.biz/idt-installer | bash"
+          when: "ibmcloud_installed.rc != 0"
+
+        - 
+          name: "IBMCloud: Authenticate to IBMCloud"
+          shell: "ibmcloud login -a cloud.ibm.com -r {{ IBMCLOUD_REGION }} -g  {{ IBMCLOUD_RESOURCE_GROUP }} --apikey {{ IBMCLOUD_API_KEY }}"
+
+        - 
+          environment: 
+            KUBECONFIG: "{{ kubeconfig_path }}"
+          name: "IBMCloud: Set IBMCloud connection to the correct kubernetes cluster"
+          shell: ibmcloud ks cluster config --cluster {{ IBMCLOUD_KUBE_CLUSTER_ID }} --admin
+
+
+
+        - name: "Check if Kubernetes cluster context is available"
+          environment: 
+            KUBECONFIG: "{{ kubeconfig_path }}"
+          register: kube_current_context
+          shell: "kubectl config current-context"
+
+        - name: "Create twistlock namespace if not present"
+          community.kubernetes.k8s: 
+            kubeconfig: "{{ kubeconfig_path }}"
+            api_version: v1
+            kind: Namespace
+            name: "{{ helm_release_namespace }}"
+            state: present
+
+
+        - name: "Helm: Install using Helm if Prisma Cloud (twistlock) is not present (can take a while)."
+          community.kubernetes.helm:
+            kubeconfig: "{{ kubeconfig_path }}" 
+            chart_ref: "{{ helm_chart_path }}"
+            name: "{{helm_release_name}}"
+            release_namespace: "{{ helm_release_namespace }}"
+            release_state: present
+            values_files: 
+              - "{{ helm_values_path }}"
+            wait: true
+          register: helm_deploy_output
+
+        - name: "Kubernetes: Fetch k8s Route info for twistlock."
+          community.kubernetes.k8s_info:
+            kubeconfig: "{{ kubeconfig_path }}"
+            kind: Route
+            namespace:  "{{ twistlock_defender_namespace }}"
+          register: k8s_route_data
+        - debug:
+            var: k8s_route_data    
+        - set_fact:
+            kubectl_service_load_balancer:  "{{ k8s_route_data | json_query(query) | first}}"
+          vars:
+            query: "resources[?(@.metadata.name=='{{ prisma_route }}')].spec.host"
+    
+        - debug:
+            var: kubectl_service_load_balancer   
+        - 
+          name: Setting up random password for prisma
+          set_fact:
+            prisma_admin_password: "{{ lookup('password', '/dev/null chars=ascii,digits length=8') }}"
+ 
+        - name: "Prisma: Set initial user for twistlock/Prisma"
+          delay: 12
+          register: prisma_initial_user_set_response
+          until: "prisma_initial_user_set_response.status != -1"
+          uri: 
+            body: "{ 'username': '{{ prisma_admin_user }}', 'password': '{{ prisma_admin_password }}' }"
+            body_format: json
+            force: true
+            method: POST
+            return_content: true
+            status_code: 
+              - 200
+              - 400
+            url: "https://{{ kubectl_service_load_balancer }}/api/v1/signup"
+            validate_certs: false
+
+        - name: Prisma sign-up status
+          set_fact:
+            signUpStatus: "{{prisma_initial_user_set_response.status}}"
+
+
+        - name: Print Prisma sign-up status
+          debug:
+            msg: "{{signUpStatus}}"
+
+        - 
+          name: "Prisma: Fetch prisma data from DB in case of retry happens after sign up"
+          when: signUpStatus == "400"
+          register: Customer_Data
+          uri: 
+           force: true
+           method: GET
+           status_code: 
+             - 200
+           url: "{{base_url}}/customer/{{custId}}/prismaDetails"
+           validate_certs: false
+           body_format: json
+
+        - 
+          name: "Setting facts in case of retry happens after sign up"
+          when: signUpStatus == "400"
+          set_fact:
+            prisma_admin_password: "{{Customer_Data.json.prismaPassword}}"
+  
+        - 
+          name: "Prisma: Get the authentication token."
+          register: prisma_token_response
+          uri: 
+            body: "{ 'username': '{{ prisma_admin_user }}', 'password': '{{ prisma_admin_password }}' }"
+            body_format: json
+            force: true
+            method: POST
+            status_code: 
+              - 200
+            url: "https://{{ kubectl_service_load_balancer }}/api/v1/authenticate"
+            validate_certs: false
+    
+        - 
+          set_fact: 
+            prisma_auth_token: "{{ prisma_token_response.json.token }}"
+    
+        - 
+          name: "Prisma: Install the Prisma license."
+          uri: 
+            body: "{ 'key': '{{ prisma_license }}' }"
+            body_format: json
+            headers: 
+              Authorization: "Bearer {{ prisma_auth_token }}"
+              Content-Type: application/json
+            method: POST
+            return_content: true
+            url: "https://{{ kubectl_service_load_balancer }}/api/v1/settings/license"
+            validate_certs: false
+    
+        - 
+          name: "Prep: Create temporary file for Daemonset deployment via kubernetes."
+          register: daemonset_temp_file
+          tempfile: 
+            state: file
+    
+        - name: "Prisma: Retrieve Prisma DeamonSet Configuration"
+          delay: 12
+          register: prisma_daemonset_configuration_response
+          until: "prisma_daemonset_configuration_response.status != -1"
+          uri: 
+            body: "{\"consoleAddr\":\"{{ kubernetes_service_name }}\",\"namespace\":\"{{ twistlock_defender_namespace }}\",\"orchestration\":\"{{ twistlock_defender_orchestration }}\",\"image\":\"\",\"selinux\":false,\"cri\":true,\"privileged\":false,\"serviceAccounts\":true,\"istio\":false,\"microsegmentation\":null}"
+            body_format: json
+            dest: "{{ daemonset_temp_file.path }}"
+            force: true
+            headers: 
+              Authorization: "Bearer {{ prisma_auth_token }}"
+            method: POST
+            return_content: true
+            url: "https://{{ kubectl_service_load_balancer }}/api/v1/defenders/daemonset.yaml"
+            validate_certs: false
+    
+        - name: "Kubernetes: Deploy Prisma DaemonSet if not present."
+          community.kubernetes.k8s:
+            kubeconfig: "{{ kubeconfig_path }}" 
+            namespace: twistlock
+            src: "{{ daemonset_temp_file.path }}"
+            state: present
+            wait: true
+          register: daemonset_deployment_result
+    
+        - name: "Cleanup: Remove Temporary DaemonSet file."
+          file: 
+            path: "{{ daemonset_temp_file.path }}"
+            state: absent
+        - 
+          name: "Deployment complete."
+          debug: 
+            msg: "Prisma Console and defenders ready. Url: https://{{ kubectl_service_load_balancer }}"
+            
+        -
+          name: "Create pcc dashboard secret"    
+          community.kubernetes.k8s:
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: pccdashboard
+                namespace: twistlock
+              type: Opaque
+              stringData:
+                url: "https://{{ kubectl_service_load_balancer }}" 
+                username: "{{ prisma_admin_user }}"
+                password: "{{ prisma_admin_password }}"
+            state: present
+          environment: 
+            KUBECONFIG: "{{ kubeconfig_path }}"
+            
+        - set_fact:
+            isDeploymentsuccess:  true           
+            
+        - name: "Cleanup: Remove Temporary KubeConfig file."
+          file: 
+            path: "{{ kubeconfig_path }}"
+            state: absent
+                        
+
+      always: 
+        - 
+          name: "Update prisma data in DB for the customer when sign up is successful"
+          when: signUpStatus == "200"
+          uri: 
+            body: "{ 'prismaUrl': 'https://{{ kubectl_service_load_balancer }}', 'prismaUsername': '{{ prisma_admin_user }}', 'prismaPassword': '{{ prisma_admin_password }}'}"
+            body_format: json
+            force: true
+            method: PUT
+            status_code: 
+              - 200
+            url: "{{base_url}}/customer/{{custId}}/prismaDetails/update"
+            validate_certs: false
+
+        - 
+          name: "Update status of installation in DB"
+          uri: 
+            body: "{ 'jobName': 'installation', 'status': '{{ isDeploymentsuccess|bool }}'}"
+            body_format: json
+            force: true
+            method: PUT
+            status_code: 
+              - 200
+            url: "{{base_url}}/customer/{{custId}}/job"
+            validate_certs: false  
+
+
+
+
+        
+

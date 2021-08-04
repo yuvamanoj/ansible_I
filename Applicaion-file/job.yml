@@ -1,0 +1,34 @@
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: manoj-ansible51
+      namespace: default
+    spec:
+      selector: {}
+      template:
+        metadata:
+          name: manoj-ansible51
+        spec:
+          containers:
+            - name: ansible-toolbox
+              image: us.icr.io/cloud-tribe/cloud-security-toolbox:v1.1
+              command: [ "/bin/sh", "-c" ]
+              args:
+                -
+                  mkdir ~/.ssh;
+                  cp /tmp/ssh/ssh-privatekey ~/.ssh/id_rsa;
+                  chmod 600 ~/.ssh/id_rsa;
+                  ssh-keyscan github.ibm.com >> ~/.ssh/known_hosts;
+                  git clone git@github.ibm.com:Cloud-Security/PCC-OC-Chart.git /tmp/playbook;
+                  mkdir /home/devops/test_1626343780250_installation_prisma;
+                  cp -r /tmp/playbook/* /home/devops/test_1626343780250_installation_prisma;
+                  ansible-playbook /tmp/playbook/ansible_install.yml -e 'custId=test_1626343780250 projPath=test_1626343780250_installation_prisma';
+              volumeMounts:
+              - name: ssh-deployment-key
+                mountPath: "/tmp/ssh/"
+                readOnly: true
+          restartPolicy: Never
+          volumes:
+          - name: ssh-deployment-key
+            secret:
+              secretName: manoj-ssh

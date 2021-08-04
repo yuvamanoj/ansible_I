@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    name: console
+  name: twistlock-console
+  namespace: {{ .Values.namespace }}
+spec:
+  {{- if .Values.serviceClusterIP }}
+  clusterIP: {{ .Values.serviceClusterIP }}
+  {{- else}}{{- end}}
+  ports:
+  - name: communication-port
+    port: {{ .Values.COMMUNICATION_PORT }}
+  {{- if .Values.MANAGEMENT_PORT_HTTPS }}
+  - name: management-port-https
+    port: {{ .Values.MANAGEMENT_PORT_HTTPS }}
+  {{- end}}
+  {{- if .Values.MANAGEMENT_PORT_HTTP }}
+  - name: mgmt-http
+    port: {{ .Values.MANAGEMENT_PORT_HTTP }}
+  {{- else }}
+  {{- end}}
+  selector:
+    {{- if .Values.customerConsoleName }}
+    name: {{ .Values.customerConsoleName }}
+    {{- else }}
+    name: twistlock-console
+    {{- end }}
+  type: {{ .Values.serviceType }}
