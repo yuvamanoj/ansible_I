@@ -1,17 +1,19 @@
     apiVersion: batch/v1
     kind: Job
     metadata:
-      name: manoj-ansible51
-      namespace: default
+      name: aaaaaa
+      namespace: xpp
     spec:
       selector: {}
       template:
         metadata:
-          name: manoj-ansible51
+          name: aaaaaa
         spec:
           containers:
             - name: ansible-toolbox
-              image: us.icr.io/cloud-tribe/cloud-security-toolbox:v1.1
+              image: mss-docker.artifactory.swg-devops.com/tab-pcc-oc-chart:0.0.1-master.0e3ac554
+          imagePullSecrets:
+            - name: regcred1
               command: [ "/bin/sh", "-c" ]
               args:
                 -
@@ -19,7 +21,7 @@
                   cp /tmp/ssh/ssh-privatekey ~/.ssh/id_rsa;
                   chmod 600 ~/.ssh/id_rsa;
                   ssh-keyscan github.ibm.com >> ~/.ssh/known_hosts;
-                  git clone git@github.ibm.com:Cloud-Security/PCC-OC-Chart.git /tmp/playbook;
+                  git clone git@github.ibm.com:managed-security/tab-pcc-oc-chart.git /tmp/playbook;
                   mkdir /home/devops/test_1626343780250_installation_prisma;
                   cp -r /tmp/playbook/* /home/devops/test_1626343780250_installation_prisma;
                   ansible-playbook /tmp/playbook/ansible_install.yml -e 'custId=test_1626343780250 projPath=test_1626343780250_installation_prisma';

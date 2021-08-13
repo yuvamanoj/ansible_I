@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jobtest
+  namespace: xpp
+spec:
+  selector: {}
+  template:
+    metadata:
+      name: jobtest
+    spec:
+      containers:
+        - name: cloud-security-toolbox
+          image: mss-docker.artifactory.swg-devops.com/tab-pcc-oc-chart:0.0.1-master.0e3ac554
+          env: 
+          - name: GIT_SSH_COMMAND
+            value: 'ssh -i /tmp/ssh/ssh-privatekey'
+          command: [ "/bin/sh", "-c" ]
+          args:
+            -
+              mkdir ~/.ssh;
+              ssh-keyscan github.ibm.com >> ~/.ssh/known_hosts;
+              git clone git@github.ibm.com:managed-security/tab-pcc-oc-chart.git /tmp/playbook;
+              ansible-playbook /tmp/playbook/ansible_pccdashboard.yml -e 'ansible_python_interpreter=/usr/bin/python3 custId=aubhlocal_1625731030965 projPath=aubhlocal_1625731030965_installation_prisma'
+              ## ansible-playbook /tmp/playbook/XXXXXXXXXXX.yaml;
+          volumeMounts:
+          - name: ssh-deployment-key
+            mountPath: "/tmp/ssh/"
+            readOnly: true
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      volumes:
+      - name: ssh-deployment-key
+        secret:
+          secretName: manoj-ssh
+          defaultMode: 0600

@@ -19,8 +19,7 @@
     prisma_license:
     helm_chart_path: "{{ lookup('env', 'PWD') }}/{{projPath}}"
     helm_values_path: "{{ helm_chart_path}}/values.yaml"
-    #base_url: https://user-registration-newoperator.cloudtribe-devops-024f02d285327b3efec3badccd07e2a1-0000.us-south.containers.appdomain.cloud
-    base_url: https://customer-registration-xpp.apps-priv.dal09-dev-ocp-01.cl.sec.ibm.com
+    base_url: https://user-registration-newoperator.cloudtribe-devops-024f02d285327b3efec3badccd07e2a1-0000.us-south.containers.appdomain.cloud
     prisma_route: pcc-route
     isDeploymentsuccess: false
     signUpStatus: 0

@@ -1,0 +1,164 @@
+def image
+def imageTag
+def version
+def fullVersion
+def chartVersion
+pipeline {
+  agent any
+
+  options {
+    buildDiscarder(logRotator(daysToKeepStr: '7', artifactDaysToKeepStr: '7'))
+  }
+
+
+  environment {
+    REPOSITORY_NAME = "${env.GIT_URL.tokenize('/')[3].split('\\.')[0]}"
+    REPOSITORY_OWNER = "${env.GIT_URL.tokenize('/')[2]}"
+    GIT_SHORT_REVISION = "${env.GIT_COMMIT[0..7]}"
+    DOCKER_SERVER = "${env.MSS_DOCKER_SERVER_PRD}"
+    DOCKER_CREDENTIALS = 'mss-docker-registry-prd-credentials'
+    NODEJS_HOME = tool('nodejs-12.16.3')
+    PATH = "$NODEJS_HOME/bin:$PATH"
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        deleteDir()
+        checkout scm
+      }
+    }
+
+    stage('Generator Version Update Check') {
+      steps {
+        script {
+          warnError('Generator Last Run Version is Outdated') {
+            withCredentials([usernamePassword(credentialsId: 'mss-artifactory-credentials', usernameVariable: 'ARTIFACTORY_USERNAME', passwordVariable: 'ARTIFACTORY_PASSWORD')]) {
+              sh '''#!/bin/bash
+                mkdir -p yo_update
+                cd yo_update
+                npm init --force > /dev/null
+                npm config set @mss:registry https://na.artifactory.swg-devops.com/artifactory/api/npm/mss-npm/  --userconfig ./.npmrc
+                npm config set //na.artifactory.swg-devops.com/artifactory/api/npm/mss-npm/:_password="$(printf ${ARTIFACTORY_PASSWORD} | base64)"  --userconfig ./.npmrc
+                npm config set //na.artifactory.swg-devops.com/artifactory/api/npm/mss-npm/:username="${ARTIFACTORY_USERNAME}"  --userconfig ./.npmrc
+                npm config set //na.artifactory.swg-devops.com/artifactory/api/npm/mss-npm/:email="${ARTIFACTORY_USERNAME}"  --userconfig ./.npmrc
+                npm config set //na.artifactory.swg-devops.com/artifactory/api/npm/mss-npm/:always-auth=true  --userconfig ./.npmrc
+                npm install yo @mss/generator-devsecops > /dev/null
+                # Workaround: https://github.com/yeoman/yo/issues/348#issuecomment-477856306
+                sed -i -e '/rootCheck/d' node_modules/yo/lib/cli.js
+                node_modules/yo/lib/cli.js @mss/devsecops --ci
+                RV=$?
+                cd ..
+                rm -rf yo_update
+                exit $RV
+              '''
+            }
+          }
+        }
+      }
+    }
+
+
+    stage('Set Full Version') {
+      steps {
+        script {
+          version = fileExists("version.txt") ? sh(script: "cat version.txt", returnStdout: true).trim() : "0.0.0"
+
+            if (env.TAG_NAME) {
+              if (!env.TAG_NAME.contains(version)) {
+                error "Git tag '${env.TAG_NAME}' does not match build version '${version}'"
+              }
+
+              // Format: <major>.<minor>.<patch>
+              fullVersion = version
+              chartVersion = version
+            } else {
+              // Format: <major>.<minor>.<patch>-<branch>.<commit hash>
+              def branch_short = env.GIT_BRANCH.replaceAll("[^a-zA-Z0-9 ]+","").toLowerCase().take(64)
+              fullVersion = "${version}-${branch_short}.${env.GIT_COMMIT[0..7]}"
+              chartVersion = "${version}-${branch_short}";
+            }
+
+
+          imageTag = "${env.DOCKER_SERVER}/${env.REPOSITORY_NAME}:${fullVersion}"
+        }
+      }
+    }
+
+    stage('Container Build') {
+      steps {
+        script {
+          docker.withRegistry("https://${DOCKER_SERVER}", DOCKER_CREDENTIALS) {
+            image = docker.build(imageTag, "--pull .")
+          }
+        }
+      }
+    }
+
+        stage('Clair Scan ') {
+          steps {  
+            script {
+              warnError('Clair Scan Failure') {
+                docker.withRegistry("https://${DOCKER_SERVER}", DOCKER_CREDENTIALS) {
+                  try {
+                    sh '''#!/bin/bash
+                    IMAGENAME=${DOCKER_SERVER}/${REPOSITORY_NAME}:'''+fullVersion +'''
+                    CLAIR_DB_ID=`docker ps -a -q --filter name=db --format="{{.ID}}"`
+                    CLAIR_SERVER_ID=`docker ps -a -q --filter name=clair --format="{{.ID}}"`
+                    if [ ! -n "$CLAIR_DB_ID" ] || [ ! -n "$CLAIR_SERVER_ID" ]
+                    then 
+                        echo "Clair db and server is not running"
+                        echo "Ensure that clair service is up"
+                        touch clair-scanning-report.json
+                        exit 1
+                    else 
+                        echo "Clair db is up and clair server is running ....."
+                    fi
+                    echo "About to start clair scanner ........."
+                    touch clair-whitelist.yml
+                    own_ip=$(hostname -i)
+                    wget https://github.com/arminc/clair-scanner/releases/download/v8/clair-scanner_linux_amd64
+                    mv clair-scanner_linux_amd64 clair-scanner
+                    chmod +x clair-scanner
+                    ./clair-scanner --ip=$own_ip -l clair.log -r clair-scanning-report.json -w clair-whitelist.yml $IMAGENAME
+                    cat clair-scanning-report.json
+                    if test -f "clair-scanning-report.json"; then
+                        input="clair-scanning-report.json"
+                        while IFS= read -r line
+                        do
+                            if [[ ("$line" == *"[]"* ) && ("$line" == *"unapproved"*) ]]; then
+                                echo "clair found 0 vulnerabilities"
+                                exit 0           
+                        fi
+                        done < "$input" 
+                        echo "clair found vulnerabilities"
+                        exit 1
+                    
+                    else
+                        exit 1
+                    fi
+                    '''
+                  } finally {
+                    archiveArtifacts allowEmptyArchive: true, artifacts: 'clair-scanning-report.json', onlyIfSuccessful: false
+                  }
+                }
+              } 
+            }
+          }
+        }
+
+    stage('Container Image') {
+      steps {
+        script {
+          docker.withRegistry("https://${DOCKER_SERVER}", DOCKER_CREDENTIALS) {
+            image.push()
+            if (env.TAG_NAME ) {
+              image.push('latest')
+            }
+          }
+        }
+      }
+    }
+  }
+}
