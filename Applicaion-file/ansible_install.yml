@@ -6,9 +6,9 @@
   vars: 
     cloud_env: openshift
     helm_release_name: twistlock-console
-    helm_release_namespace: twistlock
+    helm_release_namespace: example
     kubernetes_service_name: twistlock-console
-    twistlock_defender_namespace: twistlock
+    twistlock_defender_namespace: example
     twistlock_defender_orchestration: openshift
     prisma_admin_user: msssocadmin
     prisma_admin_password: 
@@ -19,7 +19,8 @@
     prisma_license:
     helm_chart_path: "{{ lookup('env', 'PWD') }}/{{projPath}}"
     helm_values_path: "{{ helm_chart_path}}/values.yaml"
-    base_url: https://user-registration-newoperator.cloudtribe-devops-024f02d285327b3efec3badccd07e2a1-0000.us-south.containers.appdomain.cloud
+    # base_url: https://user-registration-newoperator.cloudtribe-devops-024f02d285327b3efec3badccd07e2a1-0000.us-south.containers.appdomain.cloud
+    base_url: https://customer-registration-xpp.apps-priv.dal09-dev-ocp-01.cl.sec.ibm.com/login
     prisma_route: pcc-route
     isDeploymentsuccess: false
     signUpStatus: 0
@@ -228,7 +229,7 @@
         - name: "Kubernetes: Deploy Prisma DaemonSet if not present."
           community.kubernetes.k8s:
             kubeconfig: "{{ kubeconfig_path }}" 
-            namespace: twistlock
+            namespace: example
             src: "{{ daemonset_temp_file.path }}"
             state: present
             wait: true
@@ -251,7 +252,7 @@
               kind: Secret
               metadata:
                 name: pccdashboard
-                namespace: twistlock
+                namespace: example
               type: Opaque
               stringData:
                 url: "https://{{ kubectl_service_load_balancer }}" 
