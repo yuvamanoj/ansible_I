@@ -1,0 +1,155 @@
+---
+-
+  become: false
+  hosts: localhost
+  name: "Connect cluster"
+  vars:
+    cloud_env: openshift
+    helm_release_backend_name: pcc-backend
+    helm_release_ui_name:
+    helm_release_namespace: twistlock
+    twistlock_defender_orchestration: openshift
+    IBMCLOUD_API_KEY:
+    IBMCLOUD_KUBE_CLUSTER_ID:
+    IBMCLOUD_REGION:
+    IBMCLOUD_RESOURCE_GROUP:
+   # customerid: "{{ lookup('file', 'custid.json') }}"
+    helm_chart_backend_path: "{{ lookup('env', 'PWD') }}/{{projPath}}/pcc_backend"
+    #helm_chart_backend_path: "{{ lookup('env', 'PWD') }}/dashboard"
+    helm_backend_values_path: "{{ helm_chart_backend_path}}/values.yaml"
+
+    base_url: https://cerberus-tab-generator-customer-config-xpp.apps-priv.dal09-dev-ocp-01.cl.sec.ibm.com
+    prisma_backend_route: pcc-backend
+    isDeploymentsuccess: false
+
+
+  tasks:
+    - name: "Prep: Set up OCP based environment to deploy ui"
+      block:
+        -
+          name: "Message to display helm chart path"
+          debug:
+           msg: "{{helm_backend_values_path}}"
+
+        -
+          name: "Prep: Create temporary file for Kubernetes Kube Config (kubeconfig)"
+          register: kubeconf_temp_file
+          tempfile:
+            state: file
+        -
+          set_fact:
+            kubeconfig_path: "{{ kubeconf_temp_file.path }}"
+        -
+          name: "Prisma: Get customer cluster data from DB"
+          register: Customer_Data
+          uri:
+            force: true
+            method: GET
+            status_code:
+              - 200
+            url: "{{base_url}}/customer/{{custId}}/clusterDetails"
+            validate_certs: false
+            body_format: json
+
+        -
+          set_fact:
+            IBMCLOUD_API_KEY: "{{ Customer_Data.json.apiKey }}"
+            IBMCLOUD_KUBE_CLUSTER_ID: "{{ Customer_Data.json.clusterId }}"
+            IBMCLOUD_REGION: "{{ Customer_Data.json.region }}"
+            IBMCLOUD_RESOURCE_GROUP: "{{ Customer_Data.json.resourceGroup }}"
+            prisma_license: "{{ Customer_Data.json.licenseKey }}"
+        -
+          ignore_errors: true
+          name: "IBMCloud: Verify if IBMCloud tools are installed."
+          register: ibmcloud_installed
+          shell: "which ibmcloud"
+        -
+          name: "IBMCloud: Installing IBMCloud tools when not installed."
+          shell: "curl -sL https://ibm.biz/idt-installer | bash"
+          when: "ibmcloud_installed.rc != 0"
+
+        -
+          name: "IBMCloud: Authenticate to IBMCloud"
+          shell: "ibmcloud login -a cloud.ibm.com -r {{ IBMCLOUD_REGION }} -g  {{ IBMCLOUD_RESOURCE_GROUP }} --apikey {{ IBMCLOUD_API_KEY }}"
+
+        -
+          environment:
+            KUBECONFIG: "{{ kubeconfig_path }}"
+          name: "IBMCloud: Set IBMCloud connection to the correct kubernetes cluster"
+          shell: ibmcloud ks cluster config --cluster {{ IBMCLOUD_KUBE_CLUSTER_ID }} --admin
+
+        - name: "copy vars from 1 to 2"
+          shell: cat {{hostvars ['backend_load_balancer_NEW']}} |tail -1
+          register: PLAY2_RESULTS
+        - name: "PRINT THE VARS 2"
+          debug:
+            msg: "{{PLAY2_RESULTS.stdout}}"
+
+        - name: "Helm: Install using Helm for PCC dashboard UI."
+          community.kubernetes.helm:
+            kubeconfig: "{{ kubeconfig_path }}"
+            chart_ref: "{{ helm_chart_backend_path }}"
+            name: "{{helm_release_backend_name}}"
+            release_namespace: "{{ helm_release_namespace }}"
+            release_state: present
+            values_files:
+              - "{{ helm_backend_values_path }}"
+            wait: true
+          register: helm_deploy_output
+
+        - name: "Search for all Pods labelled app=dashboard on running status"
+          delay: 20
+          register: pod_backend_output
+          community.kubernetes.k8s_info:
+            kubeconfig: "{{ kubeconfig_path }}"
+            kind: Pod
+            label_selectors:
+              - app=dashboard
+            field_selectors:
+              - status.phase=Running
+            namespace: "{{ helm_release_namespace }}"
+        - debug:
+            var: pod_backend_output
+
+        - set_fact:
+            isDeploymentsuccess:  "{{ pod_backend_output.resources | length}}"
+        - set_fact:
+            isDeploymentsuccess:  "{{ (isDeploymentsuccess == '1') | ternary('true','false')}}"
+
+        - debug:
+            var: isDeploymentsuccess
+
+
+        - name: "Kubernetes: Fetch k8s Route info for twistlock."
+          community.kubernetes.k8s_info:
+            kubeconfig: "{{ kubeconfig_path }}"
+            kind: Route
+            namespace:  "{{ helm_release_namespace }}"
+          register: k8s_route_data
+          when: "isDeploymentsuccess==true"
+        - set_fact:
+            backend_load_balancer:  "{{ k8s_route_data | json_query(query) | first}}"
+          vars:
+            query: "resources[?(@.metadata.name=='{{ prisma_backend_route }}')].spec.host"
+          when: "isDeploymentsuccess==true"
+        - debug:
+            var: backend_load_balancer
+          when: "isDeploymentsuccess==true"
+
+        - name: "Cleanup: Remove Temporary KubeConfig file."
+          file:
+            path: "{{ kubeconfig_path }}"
+            state: absent
+
+      always:
+        -
+          name: "Update status of installation in DB"
+          uri:
+            body: "{ 'jobName': 'dashboard_installation', 'status': '{{ isDeploymentsuccess|bool }}'}"
+            body_format: json
+            force: true
+            method: PUT
+            status_code:
+              - 200
+            url: "{{base_url}}/customer/{{custId}}/job"
+            validate_certs: false

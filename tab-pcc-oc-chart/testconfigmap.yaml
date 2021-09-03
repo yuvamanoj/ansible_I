@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  
+  name: testjobconfig
+  namespace: xpp
+  
+data:
+  custid: "ocpjenkins_1629714535848"
+  projpath: "ocpjenkins_1629714535848_installation_prisma"

@@ -1,0 +1,5 @@
+#Ignore local environments
+.envrc
+.env
+#Ignorer staging area
+.chart-stage

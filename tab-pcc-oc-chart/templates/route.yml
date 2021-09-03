@@ -1,0 +1,16 @@
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: pcc-route
+  namespace: {{ .Values.namespace }}
+
+spec:
+  to:
+    kind: Service
+    name: twistlock-console
+    weight: 100
+  port:
+    targetPort: management-port-https
+  tls:
+    termination: passthrough
+    insecureEdgeTerminationPolicy: Redirect

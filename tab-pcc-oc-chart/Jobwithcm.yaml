@@ -1,0 +1,48 @@
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: pcctest1
+      namespace: xpp
+    spec:
+      selector: {}
+      template:
+        metadata:
+          name: pcctest1
+        spec:
+          #serviceAccount: pccinstall
+          containers:
+            - name: ansiblepoc-toolbox
+              image: mss-docker.artifactory.swg-devops.com/tab-pcc-oc-chart:0.0.1-test.e99dff01
+              command: [ "/bin/sh", "-c" ]
+              env:
+                - name: CUSTID
+                  valueFrom: 
+                     configMapKeyRef:
+                        name: testjobconfig
+                        key: custid
+                - name: PROJPATH
+                  valueFrom:
+                     configMapKeyRef:
+                       name: testjobconfig
+                       key: projpath        
+
+              args:
+                -
+                  mkdir ~/.ssh;
+                  cp /tmp/ssh/ssh-privatekey ~/.ssh/id_rsa;
+                  chmod 600 ~/.ssh/id_rsa;
+                  ssh-keyscan github.ibm.com >> ~/.ssh/known_hosts;
+                  git clone -b test git@github.ibm.com:managed-security/tab-pcc-oc-chart.git /tmp/playbook;
+                  mkdir /home/devops/$(PROJPATH);
+                  cp -r /tmp/playbook/* /home/devops/$(PROJPATH);
+                  ansible-playbook /tmp/playbook/ansible_install_test.yaml -e 'custId=$(CUSTID) projPath=$(PROJPATH)';
+                  sleep 10000;
+              volumeMounts:
+              - name: ssh-key
+                mountPath: "/tmp/ssh/"
+                readOnly: true
+          restartPolicy: Never
+          volumes:
+          - name: ssh-key
+            secret:
+              secretName: krish-gitkey
